@@ -278,22 +278,39 @@ async def master_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(ai_response.get('user_reply', "Entendido."))
 
 async def show_save_confirmation(update, context, data):
-    info = data['save_data']
+    # 1. Extraer save_data
+    info_raw = data.get('save_data')
+    
+    # 2. Si es una lista, procesamos cada elemento o el primero
+    if isinstance(info_raw, list):
+        # Si mandaste 2 cosas, aquí tomamos la primera para confirmar
+        # (Opcional: podrías iterar, pero para confirmar botones es mejor uno a uno)
+        info = info_raw[0] if len(info_raw) > 0 else {}
+    else:
+        info = info_raw
+
+    # Guardar en sesión
     context.user_data['pending_save'] = info
     
-    # Iconos visuales para el tipo
-    tipo_map = {'TAREA': '🛠️ TAREA (Hacer)', 'EVENTO': '📅 EVENTO (Asistir)', 'MEMO': '🧠 MEMO (Recordar)'}
-    tipo_str = tipo_map.get(info.get('entry_type'), info.get('entry_type'))
+    tipo_map = {'TAREA': '🛠️ TAREA', 'EVENTO': '📅 EVENTO', 'MEMO': '🧠 MEMO'}
+    
+    # Ahora el .get ya no fallará porque 'info' es un diccionario garantizado
+    tipo_val = info.get('entry_type', 'MEMO')
+    tipo_str = tipo_map.get(tipo_val, tipo_val)
 
     msg = (
-        f"📝 **Confirmar:**\n\n"
-        f"🏷️ Tipo: {tipo_str}\n" # Mostramos el tipo
-        f"📂 Categoría: {info.get('category')}\n"
-        f"📌 Resumen: {info.get('summary')}\n"
-        f"📅 Fecha: {info.get('event_date') or ''}\n"
+        f"📝 **Confirmación de registro:**\n\n"
+        f"🏷️ **Tipo:** {tipo_str}\n"
+        f"📂 **Categoría:** {info.get('category', 'General')}\n"
+        f"📌 **Resumen:** {info.get('summary', 'Sin detalle')}\n"
+        f"📅 **Fecha:** {info.get('event_date') or 'No definida'}\n\n"
+        f"_Detecté que enviaste varios, procesaremos el primero._" if isinstance(info_raw, list) and len(info_raw) > 1 else ""
     )
-    keyboard = [[InlineKeyboardButton("✅ Guardar", callback_data="save"), InlineKeyboardButton("✏️ Corregir", callback_data="edit")], [InlineKeyboardButton("❌ Descartar", callback_data="cancel")]]
-    await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(keyboard))
+    
+    keyboard = [[InlineKeyboardButton("✅ Guardar", callback_data="save"), 
+                 InlineKeyboardButton("❌ Cancelar", callback_data="cancel")]]
+    
+    await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
