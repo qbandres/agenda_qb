@@ -1,22 +1,29 @@
-# Use an official Python runtime as a parent image
+# Usamos una imagen base oficial y ligera de Python
+# Esta imagen es "Multi-arch", funciona en ARM (Mac) y AMD64 (Linux Server) automáticamente
 FROM python:3.11-slim
 
-# Set the working directory in the container
-WORKDIR /app
+# Evita que Python escriba archivos .pyc y bufferice logs
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
 
-# Install system dependencies
-# gcc and libpq-dev are sometimes needed for psycopg2, though binary usually includes them.
-# We'll include them to be safe and allow for potential future source builds.
+# Instalamos dependencias del sistema necesarias para PostgreSQL y compilación
+# (gcc y libpq-dev son vitales para que psycopg2 no falle al compilar)
 RUN apt-get update && apt-get install -y \
     gcc \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy the current directory contents into the container at /app
-COPY . /app
+WORKDIR /app
 
-# Install any needed packages specified in requirements.txt
+# Primero copiamos solo los requirements para aprovechar la caché de Docker
+# Si solo cambia el código pero no los requerimientos, este paso se salta (es más rápido)
+COPY requirements.txt .
+
+# Instalamos las librerías
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Run main.py when the container launches
+# Copiamos el resto del código
+COPY . .
+
+# Comando de arranque
 CMD ["python", "main.py"]
