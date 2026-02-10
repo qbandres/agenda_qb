@@ -1,0 +1,52 @@
+# General
+__pycache__/
+*.py[cod]
+*$py.class
+.DS_Store
+.env
+.venv
+env/
+venv/
+
+# Editor
+.vscode/
+.idea/
+
+# Docker
+postgres_data/
+
+# Media Files (Images, Video, Audio)
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.bmp
+*.tiff
+*.webp
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.wmv
+*.flv
+*.webm
+*.mp3
+*.wav
+*.ogg
+*.m4a
+*.flac
+
+# Documents (Office, PDF)
+*.pdf
+*.doc
+*.docx
+*.xls
+*.xlsx
+*.ppt
+*.pptx
+*.csv
+*.txt
+*.rtf
+
+# Logs
+*.log
