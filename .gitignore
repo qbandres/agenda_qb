@@ -45,7 +45,6 @@ postgres_data/
 *.ppt
 *.pptx
 *.csv
-*.txt
 *.rtf
 
 # Logs
