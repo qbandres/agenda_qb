@@ -95,7 +95,7 @@ def encode_image(image_path):
     with open(image_path, "rb") as image_file:
         return base64.b64encode(image_file.read()).decode('utf-8')
 
-# --- CEREBRO IA (MEJORADO PARA BÚSQUEDAS) ---
+# --- CEREBRO IA (MEJORADO PARA BÚSQUEDA PROFUNDA) ---
 def get_system_prompt(user_id, username):
     return f"""
 Actúas como "Jarvis", un Asistente Personal Ejecutivo para @{username}.
@@ -106,29 +106,30 @@ NIVEL 1: CONTEXTO (Campo `categoria`)
    - 'TRABAJO': Construcción, ingeniería, SOW, clientes.
    - 'PERSONAL': Familia, hogar, salud, gastos.
    - 'ACADEMICO': Cursos, Data Science, Python, estudio.
-   - 'ENTRETENIMIENTO': Música, canciones, obras, libros, películas.
+   - 'ENTRETENIMIENTO': Ocio general.
 
-NIVEL 2: TIPO (Campo `tipo_entrada`)
-   - 'TAREA': Requiere acción (Hacer).
-   - 'RECORDATORIO': Evento con fecha (Asistir).
-   - 'NOTA': Dato pasivo (Recordar).
-   - 'CULTURA': SOLO para Entretenimiento (Ver/Leer/Escuchar).
-   - 'GASTO': Salida de dinero.
+NIVEL 2: SUBCATEGORÍA (Campo `subcategoria`)
+   - Sé específico: "Cine", "Música", "Libros", "Reunión", "Compras", "Curso Incae".
 
-### 2. REGLAS SQL (CRÍTICO PARA BÚSQUEDAS):
-- Si el usuario pide ver "tareas de trabajo", la consulta DEBE ser: `SELECT ... FROM agenda_personal WHERE telegram_user_id = {user_id} AND categoria = 'TRABAJO' AND tipo_entrada = 'TAREA'`.
-- Usa siempre `ILIKE '%termino%'` para búsquedas en `resumen`.
-- PRIVACIDAD: SIEMPRE `WHERE telegram_user_id = {user_id}`.
+NIVEL 3: TIPO (Campo `tipo_entrada`)
+   - 'TAREA', 'RECORDATORIO', 'NOTA', 'CULTURA' (para arte/ocio), 'GASTO'.
+
+### 2. REGLAS SQL PARA BÚSQUEDAS (CRÍTICO):
+- **BÚSQUEDA PROFUNDA:** Cuando el usuario busque un tema (ej: "películas"), NO busques solo en categoría. Debes buscar coincidencias en `categoria`, `subcategoria` Y `resumen` usando `OR`.
+  - Ejemplo para "películas": 
+    `SELECT * FROM agenda_personal WHERE telegram_user_id = {user_id} AND (subcategoria ILIKE '%pelicula%' OR subcategoria ILIKE '%cine%' OR resumen ILIKE '%pelicula%' OR resumen ILIKE '%cine%' OR resumen ILIKE '%avatar%')`
+- **PRIVACIDAD:** SIEMPRE incluye `AND telegram_user_id = {user_id}`.
+- **ORDEN:** Siempre `ORDER BY categoria ASC, fecha_evento ASC`.
 
 ### FORMATO JSON:
 {{
   "intent": "SAVE" | "QUERY" | "DELETE" | "UPDATE",
   "reasoning": "...",
-  "sql_query": "...",
+  "sql_query": "SELECT ...",
   "save_data": {{
-      "category": "TRABAJO" | "PERSONAL" | "ACADEMICO" | "ENTRETENIMIENTO",
-      "entry_type": "TAREA" | "RECORDATORIO" | "NOTA" | "CULTURA" | "GASTO",
-      "subcategory": "...",
+      "category": "TRABAJO...",
+      "subcategory": "Ej: Cine, Música...",
+      "entry_type": "TAREA...",
       "summary": "...",
       "full_content": "...",
       "event_date": "YYYY-MM-DD HH:MM:SS" (or null),
@@ -202,7 +203,7 @@ async def execute_sql(query):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     user = update.effective_user.first_name
-    await update.message.reply_text(f"💼 **Jarvis Executive v2**\nSistema en línea para @{user}. ¿En qué puedo asistirle hoy?")
+    await update.message.reply_text(f"👋 **Hola {user}!**\nSoy Jarvis v2. Gestiono Tareas, Eventos y Recordatorios.")
 
 async def master_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -259,13 +260,34 @@ async def master_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not results:
             await update.message.reply_text("ℹ️ No se encontraron registros que coincidan con su búsqueda.")
         else:
-            msg = "📑 **Registros Encontrados**\n" + ("─" * 15) + "\n"
+            # --- VISUALIZADOR MEJORADO (Categoría + Subcategoría + Resumen) ---
+            msg = "📑 **Resultados de Búsqueda**\n"
+            current_cat = None
+            
             for r in results:
-                # Lógica visual profesional
+                cat = r.get('categoria', 'GENERAL').upper()
+                sub = r.get('subcategoria', 'General')
+                
+                # Agrupamos visualmente por categoría principal
+                if cat != current_cat:
+                    msg += f"\n📂 **{cat}**\n" + ("─" * 20) + "\n"
+                    current_cat = cat
+                
+                # Datos de la fila
+                rid = r.get('id')
+                tipo = r.get('tipo_entrada', 'NOTA')
+                resumen = escape_markdown(r.get('resumen', ''))
                 date_val = r.get('fecha_evento')
-                date_str = date_val.strftime('%d/%m %H:%M') if date_val else "Sin fecha"
-                msg += f"• `ID {r['id']}` | **{r['categoria']}**\n  {r['resumen']} ({date_str})\n\n"
+                date_str = f"📅 {date_val.strftime('%d/%m %H:%M')}" if date_val else ""
+                
+                # Icono según tipo
+                icon = {'TAREA': '📝', 'RECORDATORIO': '⏰', 'CULTURA': '🎭', 'GASTO': '💰'}.get(tipo, '🔹')
+                
+                # Formato final de línea: Icono ID | Subcategoría > Resumen
+                msg += f"{icon} `ID {rid}` | *{sub}*\n   └ {resumen} {date_str}\n\n"
+
             await update.message.reply_text(msg, parse_mode='Markdown')
+
     elif intent in ['DELETE', 'UPDATE']:
         sql = ai_response.get('sql_query')
         context.user_data['pending_sql'] = sql
@@ -286,19 +308,18 @@ async def show_save_confirmation(update, context, data):
     info = info_raw[0] if isinstance(info_raw, list) and len(info_raw) > 0 else info_raw
     context.user_data['pending_save'] = info
     
-    # Formato visual profesional
     resumen = escape_markdown(info.get('summary') or "Sin resumen")
     categoria = escape_markdown(info.get('category') or "GENERAL")
+    subcategoria = escape_markdown(info.get('subcategory') or "General")
     tipo = escape_markdown(info.get('entry_type') or "NOTA")
     fecha = escape_markdown(str(info.get('event_date') or "Indefinida"))
 
     msg = (
-        f"📋 **Propuesta de Registro**\n\n"
-        f"**Ámbito:** `{categoria}`\n"
-        f"**Tipo:** {tipo}\n"
-        f"**Detalle:** {resumen}\n"
-        f"**Fecha:** {fecha}\n\n"
-        f"¿Desea confirmar el guardado?"
+        f"📋 **Confirmar Registro**\n\n"
+        f"📂 **{categoria}** › _{subcategoria}_\n"
+        f"🏷️ **Tipo:** {tipo}\n"
+        f"📝 **Nota:** {resumen}\n"
+        f"📅 **Fecha:** {fecha}"
     )
 
     keyboard = [[
@@ -310,7 +331,7 @@ async def show_save_confirmation(update, context, data):
         await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
     except Exception as e:
         logger.error(f"Markdown Error: {e}")
-        await update.message.reply_text(msg.replace("*", "").replace("`", ""), reply_markup=InlineKeyboardMarkup(keyboard))
+        await update.message.reply_text(msg.replace("*", "").replace("`", "").replace("_", ""), reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -333,7 +354,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             new_id = cur.fetchone()[0]
             conn.commit()
             conn.close()
-            await query.edit_message_text(f"✅ Registro guardado exitosamente. (ID: {new_id})")
+            await query.edit_message_text(f"✅ Guardado (ID: {new_id})")
             context.user_data.pop('pending_save', None)
     elif query.data == "edit":
         context.user_data['state'] = 'WAITING_EDIT'
