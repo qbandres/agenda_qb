@@ -46,7 +46,7 @@ def init_db():
                 fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 categoria VARCHAR(50),
                 subcategoria VARCHAR(100),
-                tipo_entrada VARCHAR(50),  -- AQUÍ ESTÁ LA CLAVE
+                tipo_entrada VARCHAR(50),
                 resumen TEXT,
                 contenido_completo TEXT,
                 fecha_evento TIMESTAMP,
@@ -55,7 +55,7 @@ def init_db():
             );
         """)
         
-        # Asegurar columna username
+        # Asegurar columnas
         cur.execute("""
             DO $$ 
             BEGIN 
@@ -76,46 +76,37 @@ def init_db():
         logger.error(f"Error DB init: {e}")
 
 # --- UTILIDADES ---
-def clean_and_parse_json(text_response):
-    cleaned = text_response.replace("```json", "").replace("```", "").strip()
-    try:
-        return json.loads(cleaned)
-    except:
-        return None
+def escape_markdown(text):
+    """Escapa caracteres especiales para evitar errores de Telegram BadRequest"""
+    if not text: return ""
+    parse_chars = ['_', '*', '`', '[']
+    for char in parse_chars:
+        text = text.replace(char, f"\\{char}")
+    return text
 
 def encode_image(image_path):
     with open(image_path, "rb") as image_file:
         return base64.b64encode(image_file.read()).decode('utf-8')
 
-# --- CEREBRO IA (PROMPT MEJORADO) ---
+# --- CEREBRO IA ---
 def get_system_prompt(user_id, username):
     return f"""
 Actúas como "Jarvis", un Asistente Personal Ejecutivo para @{username}.
 Gestionas la tabla `agenda_personal` en PostgreSQL.
 
-### 1. CLASIFICACIÓN DE ENTRADAS (CRÍTICO):
-Debes asignar el campo `tipo_entrada` automáticamente:
-- **'TAREA'**: Algo que requiere acción/esfuerzo (ej: "Comprar leche", "Llamar cliente", "Estudiar").
-- **'EVENTO'**: Una cita con hora fija (ej: "Reunión 3pm", "Dentista", "Vuelo").
-- **'MEMO'**: Información pasiva, recordatorios sin acción, listas de deseos (ej: "Cumpleaños de mamá", "Ver película X", "Libro recomendado", "Clave Wifi").
+### 1. CLASIFICACIÓN DE ENTRADAS:
+- **'TAREA'**: Acción/esfuerzo (ej: "Comprar", "Llamar").
+- **'EVENTO'**: Cita con hora (ej: "Reunión", "Dentista").
+- **'MEMO'**: Información pasiva o recordatorios (ej: "Cumpleaños", "Clave Wifi").
 
 ### 2. REGLAS SQL:
-- **TABLA ÚNICA:** `agenda_personal`.
-- **PRIVACIDAD:** SIEMPRE `WHERE telegram_user_id = {user_id}`.
-- **FILTROS INTELIGENTES:**
-  - Si piden "tareas" o "pendientes" -> `AND tipo_entrada = 'TAREA'`.
-  - Si piden "cumpleaños" -> `AND resumen ILIKE '%cumpleaños%'`.
-  - Si piden "agenda" -> Muestra TODO (Eventos, Tareas y Memos relevantes).
-  - Si piden "libros/pelis" -> `AND categoria = 'MEDIA_BACKLOG'`.
-
-### 3. CATEGORÍAS:
-WORK, STUDY, PERSONAL, MEDIA_BACKLOG (Pelis/Libros), QUICK_NOTE.
+- PRIVACIDAD: SIEMPRE `WHERE telegram_user_id = {user_id}`.
 
 ### FORMATO JSON:
 {{
   "intent": "SAVE" | "QUERY" | "DELETE" | "UPDATE",
-  "reasoning": "Explica por qué elegiste el tipo_entrada",
-  "sql_query": "SELECT id, tipo_entrada, categoria, resumen, fecha_evento FROM agenda_personal WHERE telegram_user_id = {user_id} ...",
+  "reasoning": "...",
+  "sql_query": "...",
   "save_data": {{
       "category": "WORK" | "STUDY" | "PERSONAL" | "MEDIA_BACKLOG" | "QUICK_NOTE",
       "entry_type": "TAREA" | "EVENTO" | "MEMO",
@@ -125,7 +116,7 @@ WORK, STUDY, PERSONAL, MEDIA_BACKLOG (Pelis/Libros), QUICK_NOTE.
       "event_date": "YYYY-MM-DD HH:MM:SS" (or null),
       "extra_data": {{}}
   }},
-  "user_reply": "Respuesta al usuario"
+  "user_reply": "..."
 }}
 """
 
@@ -138,8 +129,7 @@ async def process_with_ai(content_type, content_data, current_date, user_id, use
             with open(content_data, "rb") as audio_file:
                 transcription = await client.audio.transcriptions.create(model="whisper-1", file=audio_file)
             messages.append({"role": "user", "content": f"Audio: {transcription.text}"})
-        except Exception:
-            return None
+        except Exception: return None
     elif content_type == 'image':
         try:
             base64_image = encode_image(content_data)
@@ -150,8 +140,7 @@ async def process_with_ai(content_type, content_data, current_date, user_id, use
                     {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
                 ]
             })
-        except Exception:
-            return None
+        except Exception: return None
     elif content_type == 'text':
         messages.append({"role": "user", "content": content_data})
 
@@ -191,12 +180,12 @@ async def execute_sql(query):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     user = update.effective_user.first_name
-    await update.message.reply_text(f"👋 **Hola {user}!**\nSoy Jarvis v2. Ahora distingo entre Tareas, Eventos y Recordatorios.")
+    await update.message.reply_text(f"👋 **Hola {user}!**\nSoy Jarvis v2. Gestiono Tareas, Eventos y Recordatorios.")
 
 async def master_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     username = update.effective_user.username or update.effective_user.first_name
-    current_date = datetime.now().strftime("%Y-02-10 %H:%M:%S")
+    current_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
     text_input = update.message.text or ""
 
@@ -210,11 +199,8 @@ async def master_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         correction_prompt = f"DATOS: {json.dumps(original_data)}\nCORRECCIÓN: '{text_input}'\nMantén intent='SAVE'."
         context.user_data['state'] = None
         ai_response = await process_with_ai('text', correction_prompt, current_date, user_id, username)
-        
         if ai_response and ai_response.get('intent') == 'SAVE':
              await show_save_confirmation(update, context, ai_response)
-        else:
-             await update.message.reply_text("❌ No entendí la corrección.")
         return
 
     ai_response = None
@@ -244,29 +230,18 @@ async def master_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if intent == 'SAVE':
         await show_save_confirmation(update, context, ai_response)
-        
     elif intent == 'QUERY':
         sql = ai_response.get('sql_query')
         results = await execute_sql(sql)
-        
         if not results:
-            await update.message.reply_text(f"📭 Nada encontrado. (Tabla: `agenda_personal`)")
+            await update.message.reply_text(f"📭 Nada encontrado.")
         else:
             msg = "🔍 **Resultados:**\n\n"
             for r in results:
-                rid = r.get('id', '-')
-                # Mostramos un icono según el TIPO DE ENTRADA
                 tipo = r.get('tipo_entrada', 'OTRO')
                 icon = "📝" if tipo == 'TAREA' else "📅" if tipo == 'EVENTO' else "🧠"
-                
-                cat = r.get('categoria', 'N/A')
-                summ = r.get('resumen', 'Sin título')
-                date = r.get('fecha_evento')
-                date_str = date.strftime('%d/%m %H:%M') if date else ""
-                
-                msg += f"🆔 {rid} | {icon} {tipo} | {cat}\n📌 {summ}\n📅 {date_str}\n\n"
+                msg += f"🆔 {r.get('id')} | {icon} {tipo}\n📌 {r.get('resumen')}\n\n"
             await update.message.reply_text(msg)
-
     elif intent in ['DELETE', 'UPDATE']:
         sql = ai_response.get('sql_query')
         context.user_data['pending_sql'] = sql
@@ -278,109 +253,84 @@ async def master_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(ai_response.get('user_reply', "Entendido."))
 
 async def show_save_confirmation(update, context, data):
-    # 1. Extraer save_data de forma segura
     info_raw = data.get('save_data')
-    
-    # Si no hay datos, abortamos con un mensaje de error
     if not info_raw:
-        await update.message.reply_text("❌ No pude procesar la información para guardar. Intenta de nuevo.")
+        await update.message.reply_text("❌ Sin datos válidos.")
         return
 
-    # 2. Si es una lista (varios recordatorios), tomamos el primero
-    if isinstance(info_raw, list):
-        info = info_raw[0] if len(info_raw) > 0 else {}
-    else:
-        info = info_raw
-
-    # 3. Guardar en la sesión para el botón "✅ Guardar"
+    # Arreglo para cuando la IA manda una lista
+    info = info_raw[0] if isinstance(info_raw, list) and len(info_raw) > 0 else info_raw
     context.user_data['pending_save'] = info
     
-    # 4. Construir el mensaje asegurando que NO esté vacío
     tipo_map = {'TAREA': '🛠️ TAREA', 'EVENTO': '📅 EVENTO', 'MEMO': '🧠 MEMO'}
-    tipo_val = info.get('entry_type', 'MEMO')
-    tipo_str = tipo_map.get(tipo_val, tipo_val)
+    tipo_str = tipo_map.get(info.get('entry_type'), '🧠 MEMO')
 
-    # Construcción garantizada del mensaje
-    resumen = info.get('summary') or info.get('description') or "Sin resumen"
-    categoria = info.get('category') or "General"
-    fecha = info.get('event_date') or "No definida"
+    # Blindaje contra caracteres especiales (Markdown error)
+    resumen = escape_markdown(info.get('summary') or info.get('description') or "Sin resumen")
+    categoria = escape_markdown(info.get('category') or "General")
+    fecha = escape_markdown(info.get('event_date') or "No definida")
 
     msg = (
-        f"📝 **¿Deseas guardar este registro?**\n\n"
-        f"🏷️ **Tipo:** {tipo_str}\n"
-        f"📂 **Categoría:** {categoria}\n"
-        f"📌 **Resumen:** {resumen}\n"
-        f"📅 **Fecha:** {fecha}"
+        f"📝 *¿Deseas guardar este registro?*\n\n"
+        f"🏷️ *Tipo:* {tipo_str}\n"
+        f"📂 *Categoría:* {categoria}\n"
+        f"📌 *Resumen:* {resumen}\n"
+        f"📅 *Fecha:* {fecha}"
     )
 
-    # Si venían varios mensajes, avisamos
     if isinstance(info_raw, list) and len(info_raw) > 1:
-        msg += f"\n\n⚠️ _Detecté {len(info_raw)} recordatorios. Guardaremos el primero ahora._"
+        msg += f"\n\n⚠️ _Detecté múltiples ítems. Guardaremos el primero._"
 
-    # 5. Teclado de botones
-    keyboard = [
-        [
-            InlineKeyboardButton("✅ Guardar", callback_data="save"),
-            InlineKeyboardButton("✏️ Corregir", callback_data="edit")
-        ],
-        [
-            InlineKeyboardButton("❌ Cancelar", callback_data="cancel")
-        ]
-    ]
+    keyboard = [[
+        InlineKeyboardButton("✅ Guardar", callback_data="save"),
+        InlineKeyboardButton("✏️ Corregir", callback_data="edit")
+    ], [InlineKeyboardButton("❌ Cancelar", callback_data="cancel")]]
 
-    # Enviar con validación de seguridad
-    if msg.strip():
-        await update.message.reply_text(
-            msg, 
-            reply_markup=InlineKeyboardMarkup(keyboard), 
-            parse_mode='Markdown'
-        )
-    else:
-        await update.message.reply_text("❌ Error interno: El mensaje de confirmación se generó vacío.")
+    try:
+        await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+    except Exception:
+        # Plan B si falla el Markdown
+        await update.message.reply_text(msg.replace("*", "").replace("_", ""), reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    data = query.data
     user_id = update.effective_user.id
     username = update.effective_user.username or update.effective_user.first_name
 
-    if data == "save":
+    if query.data == "save":
         item = context.user_data.get('pending_save')
         if item:
             conn = get_db_connection()
             cur = conn.cursor()
-            # GUARDAMOS EL TIPO_ENTRADA (entry_type)
             cur.execute("""
                 INSERT INTO agenda_personal 
                 (telegram_user_id, username, categoria, subcategoria, tipo_entrada, fecha_creacion, resumen, contenido_completo, fecha_evento, datos_extra, estado)
                 VALUES (%s, %s, %s, %s, %s, NOW(), %s, %s, %s, %s, 'APPROVED') 
                 RETURNING id
-            """, (user_id, username, item['category'], item.get('subcategory'), item.get('entry_type', 'MEMO'), item['summary'], item.get('full_content'), item.get('event_date'), Json(item.get('extra_data'))))
+            """, (user_id, username, item.get('category'), item.get('subcategory'), item.get('entry_type'), item['summary'], item.get('full_content'), item.get('event_date'), Json(item.get('extra_data'))))
             new_id = cur.fetchone()[0]
             conn.commit()
             conn.close()
             await query.edit_message_text(f"✅ Guardado (ID: {new_id})")
             context.user_data.pop('pending_save', None)
-    elif data == "edit":
+    elif query.data == "edit":
         context.user_data['state'] = 'WAITING_EDIT'
         await query.edit_message_text("✏️ Escribe el cambio...")
-    elif data == "cancel":
+    elif query.data == "cancel":
         await query.edit_message_text("❌ Cancelado.")
         context.user_data.clear()
-    elif data == "exec_sql":
+    elif query.data == "exec_sql":
         sql = context.user_data.get('pending_sql')
         if sql:
             res = await execute_sql(sql)
             await query.edit_message_text(f"✅ Hecho. ({res})")
-        else:
-            await query.edit_message_text("❌ Error SQL.")
 
 if __name__ == '__main__':
     init_db()
     app = ApplicationBuilder().token(os.getenv("TELEGRAM_TOKEN")).build()
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND) | filters.PHOTO | filters.VOICE, master_handler))
+    app.add_handler(MessageHandler((filters.TEXT | filters.PHOTO | filters.VOICE) & (~filters.COMMAND), master_handler))
     app.add_handler(CallbackQueryHandler(button_callback))
-    print("🔥 JARVIS V2 (Tipos de Entrada) RUNNING...")
+    print("🔥 JARVIS V2 RUNNING...")
     app.run_polling()
