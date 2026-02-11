@@ -321,6 +321,9 @@ async def show_save_confirmation(update, context, data):
     keyboard = [
         [
             InlineKeyboardButton("✅ Guardar", callback_data="save"),
+            InlineKeyboardButton("✏️ Corregir", callback_data="edit")
+        ],
+        [
             InlineKeyboardButton("❌ Cancelar", callback_data="cancel")
         ]
     ]
