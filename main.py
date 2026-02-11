@@ -95,9 +95,18 @@ Actúas como "Jarvis", un Asistente Personal Ejecutivo para @{username}.
 Gestionas la tabla `agenda_personal` en PostgreSQL.
 
 ### 1. CLASIFICACIÓN DE ENTRADAS:
-- **'TAREA'**: Acción/esfuerzo (ej: "Comprar", "Llamar").
-- **'EVENTO'**: Cita con hora (ej: "Reunión", "Dentista").
-- **'MEMO'**: Información pasiva o recordatorios (ej: "Cumpleaños", "Clave Wifi").
+1. CONTEXTO (Campo `categoria`):
+   - 'TRABAJO': Construcción, ingeniería, SOW, clientes.
+   - 'PERSONAL': Familia, hogar, salud, gastos.
+   - 'ACADEMICO': Cursos, Data Science, Python, tareas de estudio.
+   - 'ENTRETENIMIENTO': Música, canciones, obras, libros, películas.
+
+2. TIPO_ACCION (Campo `tipo_entrada`):
+   - 'TAREA': Requiere hacer algo (ej. "Enviar correo").
+   - 'RECORDATORIO': Eventos con fecha (ej. "Reunión mañana").
+   - 'NOTA': Información útil (ej. "Clave de acceso").
+   - 'CULTURA': Específico para Canciones, Libros, Obras o Películas.
+   - 'GASTO': Salidas de dinero.
 
 ### 2. REGLAS SQL:
 - PRIVACIDAD: SIEMPRE `WHERE telegram_user_id = {user_id}`.
@@ -108,8 +117,8 @@ Gestionas la tabla `agenda_personal` en PostgreSQL.
   "reasoning": "...",
   "sql_query": "...",
   "save_data": {{
-      "category": "WORK" | "STUDY" | "PERSONAL" | "MEDIA_BACKLOG" | "QUICK_NOTE",
-      "entry_type": "TAREA" | "EVENTO" | "MEMO",
+      "category": "TRABAJO" | "PERSONAL" | "ACADEMICO" | "ENTRETENIMIENTO",
+      "entry_type": "TAREA" | "RECORDATORIO" | "NOTA" | "CULTURA" | "GASTO",
       "subcategory": "...",
       "summary": "...",
       "full_content": "...",
@@ -239,7 +248,11 @@ async def master_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             msg = "🔍 **Resultados:**\n\n"
             for r in results:
                 tipo = r.get('tipo_entrada', 'OTRO')
-                icon = "📝" if tipo == 'TAREA' else "📅" if tipo == 'EVENTO' else "🧠"
+                icon_map = {
+                    'TAREA': '📝', 'RECORDATORIO': '📅', 'NOTA': '🧠', 
+                    'CULTURA': '🎭', 'GASTO': '💰'
+                }
+                icon = icon_map.get(tipo, '🔹')
                 msg += f"🆔 {r.get('id')} | {icon} {tipo}\n📌 {r.get('resumen')}\n\n"
             await update.message.reply_text(msg)
     elif intent in ['DELETE', 'UPDATE']:
@@ -262,8 +275,14 @@ async def show_save_confirmation(update, context, data):
     info = info_raw[0] if isinstance(info_raw, list) and len(info_raw) > 0 else info_raw
     context.user_data['pending_save'] = info
     
-    tipo_map = {'TAREA': '🛠️ TAREA', 'EVENTO': '📅 EVENTO', 'MEMO': '🧠 MEMO'}
-    tipo_str = tipo_map.get(info.get('entry_type'), '🧠 MEMO')
+    tipo_map = {
+        'TAREA': '🛠️ TAREA', 
+        'RECORDATORIO': '📅 RECORDATORIO', 
+        'NOTA': '🧠 NOTA',
+        'CULTURA': '🎭 CULTURA',
+        'GASTO': '💰 GASTO'
+    }
+    tipo_str = tipo_map.get(info.get('entry_type'), '🧠 NOTA')
 
     # Blindaje contra caracteres especiales (Markdown error)
     resumen = escape_markdown(info.get('summary') or info.get('description') or "Sin resumen")
