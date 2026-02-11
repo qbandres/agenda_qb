@@ -278,39 +278,62 @@ async def master_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(ai_response.get('user_reply', "Entendido."))
 
 async def show_save_confirmation(update, context, data):
-    # 1. Extraer save_data
+    # 1. Extraer save_data de forma segura
     info_raw = data.get('save_data')
     
-    # 2. Si es una lista, procesamos cada elemento o el primero
+    # Si no hay datos, abortamos con un mensaje de error
+    if not info_raw:
+        await update.message.reply_text("❌ No pude procesar la información para guardar. Intenta de nuevo.")
+        return
+
+    # 2. Si es una lista (varios recordatorios), tomamos el primero
     if isinstance(info_raw, list):
-        # Si mandaste 2 cosas, aquí tomamos la primera para confirmar
-        # (Opcional: podrías iterar, pero para confirmar botones es mejor uno a uno)
         info = info_raw[0] if len(info_raw) > 0 else {}
     else:
         info = info_raw
 
-    # Guardar en sesión
+    # 3. Guardar en la sesión para el botón "✅ Guardar"
     context.user_data['pending_save'] = info
     
+    # 4. Construir el mensaje asegurando que NO esté vacío
     tipo_map = {'TAREA': '🛠️ TAREA', 'EVENTO': '📅 EVENTO', 'MEMO': '🧠 MEMO'}
-    
-    # Ahora el .get ya no fallará porque 'info' es un diccionario garantizado
     tipo_val = info.get('entry_type', 'MEMO')
     tipo_str = tipo_map.get(tipo_val, tipo_val)
 
+    # Construcción garantizada del mensaje
+    resumen = info.get('summary') or info.get('description') or "Sin resumen"
+    categoria = info.get('category') or "General"
+    fecha = info.get('event_date') or "No definida"
+
     msg = (
-        f"📝 **Confirmación de registro:**\n\n"
+        f"📝 **¿Deseas guardar este registro?**\n\n"
         f"🏷️ **Tipo:** {tipo_str}\n"
-        f"📂 **Categoría:** {info.get('category', 'General')}\n"
-        f"📌 **Resumen:** {info.get('summary', 'Sin detalle')}\n"
-        f"📅 **Fecha:** {info.get('event_date') or 'No definida'}\n\n"
-        f"_Detecté que enviaste varios, procesaremos el primero._" if isinstance(info_raw, list) and len(info_raw) > 1 else ""
+        f"📂 **Categoría:** {categoria}\n"
+        f"📌 **Resumen:** {resumen}\n"
+        f"📅 **Fecha:** {fecha}"
     )
-    
-    keyboard = [[InlineKeyboardButton("✅ Guardar", callback_data="save"), 
-                 InlineKeyboardButton("❌ Cancelar", callback_data="cancel")]]
-    
-    await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+
+    # Si venían varios mensajes, avisamos
+    if isinstance(info_raw, list) and len(info_raw) > 1:
+        msg += f"\n\n⚠️ _Detecté {len(info_raw)} recordatorios. Guardaremos el primero ahora._"
+
+    # 5. Teclado de botones
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ Guardar", callback_data="save"),
+            InlineKeyboardButton("❌ Cancelar", callback_data="cancel")
+        ]
+    ]
+
+    # Enviar con validación de seguridad
+    if msg.strip():
+        await update.message.reply_text(
+            msg, 
+            reply_markup=InlineKeyboardMarkup(keyboard), 
+            parse_mode='Markdown'
+        )
+    else:
+        await update.message.reply_text("❌ Error interno: El mensaje de confirmación se generó vacío.")
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
