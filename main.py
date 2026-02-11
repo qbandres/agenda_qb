@@ -291,8 +291,8 @@ async def show_save_confirmation(update, context, data):
 
     msg = (
         f"📝 *¿Deseas guardar este registro?*\n\n"
-        f"🏷️ *Tipo:* {tipo_str}\n"
         f"📂 *Categoría:* {categoria}\n"
+        f"🏷️ *Tipo:* {tipo_str}\n"
         f"📌 *Resumen:* {resumen}\n"
         f"📅 *Fecha:* {fecha}"
     )
