@@ -51,11 +51,11 @@ def init_db():
                 contenido_completo TEXT,
                 fecha_evento TIMESTAMP,
                 datos_extra JSONB,
-                estado VARCHAR(20) DEFAULT 'PENDIENTE'
+                estado VARCHAR(20) DEFAULT 'APPROVED'
             );
         """)
         
-        # Asegurar columnas
+        # Asegurar columnas (Mantenemos tu lógica de migración DO $$)
         cur.execute("""
             DO $$ 
             BEGIN 
@@ -76,6 +76,13 @@ def init_db():
         logger.error(f"Error DB init: {e}")
 
 # --- UTILIDADES ---
+def clean_and_parse_json(text_response):
+    cleaned = text_response.replace("```json", "").replace("```", "").strip()
+    try:
+        return json.loads(cleaned)
+    except:
+        return None
+
 def escape_markdown(text):
     """Escapa caracteres especiales para evitar errores de Telegram BadRequest"""
     if not text: return ""
@@ -88,27 +95,29 @@ def encode_image(image_path):
     with open(image_path, "rb") as image_file:
         return base64.b64encode(image_file.read()).decode('utf-8')
 
-# --- CEREBRO IA ---
+# --- CEREBRO IA (MEJORADO PARA BÚSQUEDAS) ---
 def get_system_prompt(user_id, username):
     return f"""
 Actúas como "Jarvis", un Asistente Personal Ejecutivo para @{username}.
 Gestionas la tabla `agenda_personal` en PostgreSQL.
 
-### 1. JERARQUÍA DE CLASIFICACIÓN (IMPORTANTE):
-NIVEL 1: CONTEXTO (Campo `categoria`) -> Es la esfera principal.
+### 1. JERARQUÍA DE CLASIFICACIÓN:
+NIVEL 1: CONTEXTO (Campo `categoria`) 
    - 'TRABAJO': Construcción, ingeniería, SOW, clientes.
    - 'PERSONAL': Familia, hogar, salud, gastos.
-   - 'ACADEMICO': Cursos, Data Science, Python, tareas de estudio.
+   - 'ACADEMICO': Cursos, Data Science, Python, estudio.
    - 'ENTRETENIMIENTO': Música, canciones, obras, libros, películas.
 
-NIVEL 2: TIPO (Campo `tipo_entrada`) -> Es la subcategoría funcional.
+NIVEL 2: TIPO (Campo `tipo_entrada`)
    - 'TAREA': Requiere acción (Hacer).
    - 'RECORDATORIO': Evento con fecha (Asistir).
    - 'NOTA': Dato pasivo (Recordar).
    - 'CULTURA': SOLO para Entretenimiento (Ver/Leer/Escuchar).
    - 'GASTO': Salida de dinero.
 
-### 2. REGLAS SQL:
+### 2. REGLAS SQL (CRÍTICO PARA BÚSQUEDAS):
+- Si el usuario pide ver "tareas de trabajo", la consulta DEBE ser: `SELECT ... FROM agenda_personal WHERE telegram_user_id = {user_id} AND categoria = 'TRABAJO' AND tipo_entrada = 'TAREA'`.
+- Usa siempre `ILIKE '%termino%'` para búsquedas en `resumen`.
 - PRIVACIDAD: SIEMPRE `WHERE telegram_user_id = {user_id}`.
 
 ### FORMATO JSON:
@@ -137,19 +146,23 @@ async def process_with_ai(content_type, content_data, current_date, user_id, use
         try:
             with open(content_data, "rb") as audio_file:
                 transcription = await client.audio.transcriptions.create(model="whisper-1", file=audio_file)
-            messages.append({"role": "user", "content": f"Audio: {transcription.text}"})
-        except Exception: return None
+            messages.append({"role": "user", "content": f"Audio recibido: {transcription.text}"})
+        except Exception as e:
+            logger.error(f"Error Whisper: {e}")
+            return None
     elif content_type == 'image':
         try:
             base64_image = encode_image(content_data)
             messages.append({
                 "role": "user", 
                 "content": [
-                    {"type": "text", "text": "Analiza esta imagen para la agenda."},
+                    {"type": "text", "text": "Analiza esta imagen y extrae la información relevante para la agenda según las categorías establecidas."},
                     {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
                 ]
             })
-        except Exception: return None
+        except Exception as e:
+            logger.error(f"Error Vision: {e}")
+            return None
     elif content_type == 'text':
         messages.append({"role": "user", "content": content_data})
 
@@ -189,7 +202,7 @@ async def execute_sql(query):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     user = update.effective_user.first_name
-    await update.message.reply_text(f"👋 **Hola {user}!**\nSoy Jarvis v2. Gestiono Tareas, Eventos y Recordatorios.")
+    await update.message.reply_text(f"💼 **Jarvis Executive v2**\nSistema en línea para @{user}. ¿En qué puedo asistirle hoy?")
 
 async def master_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -205,26 +218,27 @@ async def master_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.user_data.get('state') == 'WAITING_EDIT':
         original_data = context.user_data.get('pending_save')
         await update.message.reply_text("🔄 Procesando corrección...")
-        correction_prompt = f"DATOS: {json.dumps(original_data)}\nCORRECCIÓN: '{text_input}'\nMantén intent='SAVE'."
+        correction_prompt = f"DATOS ORIGINALES: {json.dumps(original_data)}\nCORRECCIÓN SOLICITADA: '{text_input}'\nGenera el nuevo JSON de guardado."
         context.user_data['state'] = None
         ai_response = await process_with_ai('text', correction_prompt, current_date, user_id, username)
         if ai_response and ai_response.get('intent') == 'SAVE':
              await show_save_confirmation(update, context, ai_response)
+        else:
+             await update.message.reply_text("❌ No se pudo procesar la corrección.")
         return
 
     ai_response = None
     if text_input:
-        await update.message.reply_text("⚡ Pensando...")
         ai_response = await process_with_ai('text', text_input, current_date, user_id, username)
     elif update.message.photo:
-        await update.message.reply_text("👁️ Analizando...")
+        await update.message.reply_text("👁️ Analizando imagen...")
         photo_file = await update.message.photo[-1].get_file()
         with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as temp:
             await photo_file.download_to_drive(temp.name)
             ai_response = await process_with_ai('image', temp.name, current_date, user_id, username)
             os.remove(temp.name)
     elif update.message.voice:
-        await update.message.reply_text("🎧 Escuchando...")
+        await update.message.reply_text("🎧 Procesando audio...")
         voice_file = await update.message.voice.get_file()
         with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as temp:
             await voice_file.download_to_drive(temp.name)
@@ -232,7 +246,7 @@ async def master_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             os.remove(temp.name)
 
     if not ai_response:
-        await update.message.reply_text("😵 Error de IA.")
+        await update.message.reply_text("😵 Lo siento, hubo un error procesando la solicitud.")
         return
 
     intent = ai_response.get('intent')
@@ -243,24 +257,22 @@ async def master_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sql = ai_response.get('sql_query')
         results = await execute_sql(sql)
         if not results:
-            await update.message.reply_text(f"📭 Nada encontrado.")
+            await update.message.reply_text("ℹ️ No se encontraron registros que coincidan con su búsqueda.")
         else:
-            msg = "🔍 **Resultados:**\n\n"
+            msg = "📑 **Registros Encontrados**\n" + ("─" * 15) + "\n"
             for r in results:
-                tipo = r.get('tipo_entrada', 'OTRO')
-                icon_map = {
-                    'TAREA': '📝', 'RECORDATORIO': '📅', 'NOTA': '🧠', 
-                    'CULTURA': '🎭', 'GASTO': '💰'
-                }
-                icon = icon_map.get(tipo, '🔹')
-                msg += f"🆔 {r.get('id')} | {icon} {tipo}\n📌 {r.get('resumen')}\n\n"
-            await update.message.reply_text(msg)
+                # Lógica visual profesional
+                date_val = r.get('fecha_evento')
+                date_str = date_val.strftime('%d/%m %H:%M') if date_val else "Sin fecha"
+                msg += f"• `ID {r['id']}` | **{r['categoria']}**\n  {r['resumen']} ({date_str})\n\n"
+            await update.message.reply_text(msg, parse_mode='Markdown')
     elif intent in ['DELETE', 'UPDATE']:
         sql = ai_response.get('sql_query')
         context.user_data['pending_sql'] = sql
         await update.message.reply_text(
-            f"⚠️ Confirmar SQL:\n`{sql}`", 
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🚀 Ejecutar", callback_data="exec_sql"), InlineKeyboardButton("❌ Cancelar", callback_data="cancel")]])
+            f"⚠️ **Confirmación de Acción**\n\n¿Desea ejecutar la siguiente operación?\n`{sql}`", 
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Ejecutar", callback_data="exec_sql"), InlineKeyboardButton("Cancelar", callback_data="cancel")]]),
+            parse_mode='Markdown'
         )
     else:
         await update.message.reply_text(ai_response.get('user_reply', "Entendido."))
@@ -268,48 +280,37 @@ async def master_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def show_save_confirmation(update, context, data):
     info_raw = data.get('save_data')
     if not info_raw:
-        await update.message.reply_text("❌ Sin datos válidos.")
+        await update.message.reply_text("❌ Error: No se detectaron datos para guardar.")
         return
 
-    # Arreglo para cuando la IA manda una lista
     info = info_raw[0] if isinstance(info_raw, list) and len(info_raw) > 0 else info_raw
     context.user_data['pending_save'] = info
     
-    tipo_map = {
-        'TAREA': '🛠️ TAREA', 
-        'RECORDATORIO': '📅 RECORDATORIO', 
-        'NOTA': '🧠 NOTA',
-        'CULTURA': '🎭 CULTURA',
-        'GASTO': '💰 GASTO'
-    }
-    tipo_str = tipo_map.get(info.get('entry_type'), '🧠 NOTA')
-
-    # Blindaje contra caracteres especiales (Markdown error)
-    resumen = escape_markdown(info.get('summary') or info.get('description') or "Sin resumen")
-    categoria = escape_markdown(info.get('category') or "General")
-    fecha = escape_markdown(info.get('event_date') or "No definida")
+    # Formato visual profesional
+    resumen = escape_markdown(info.get('summary') or "Sin resumen")
+    categoria = escape_markdown(info.get('category') or "GENERAL")
+    tipo = escape_markdown(info.get('entry_type') or "NOTA")
+    fecha = escape_markdown(str(info.get('event_date') or "Indefinida"))
 
     msg = (
-        f"📝 *¿Deseas guardar este registro?*\n\n"
-        f"📂 *Categoría:* {categoria}\n"
-        f"🏷️ *Tipo:* {tipo_str}\n"
-        f"📌 *Resumen:* {resumen}\n"
-        f"📅 *Fecha:* {fecha}"
+        f"📋 **Propuesta de Registro**\n\n"
+        f"**Ámbito:** `{categoria}`\n"
+        f"**Tipo:** {tipo}\n"
+        f"**Detalle:** {resumen}\n"
+        f"**Fecha:** {fecha}\n\n"
+        f"¿Desea confirmar el guardado?"
     )
 
-    if isinstance(info_raw, list) and len(info_raw) > 1:
-        msg += f"\n\n⚠️ _Detecté múltiples ítems. Guardaremos el primero._"
-
     keyboard = [[
-        InlineKeyboardButton("✅ Guardar", callback_data="save"),
-        InlineKeyboardButton("✏️ Corregir", callback_data="edit")
-    ], [InlineKeyboardButton("❌ Cancelar", callback_data="cancel")]]
+        InlineKeyboardButton("✅ Confirmar", callback_data="save"),
+        InlineKeyboardButton("✏️ Editar", callback_data="edit")
+    ], [InlineKeyboardButton("❌ Descartar", callback_data="cancel")]]
 
     try:
         await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
-    except Exception:
-        # Plan B si falla el Markdown
-        await update.message.reply_text(msg.replace("*", "").replace("_", ""), reply_markup=InlineKeyboardMarkup(keyboard))
+    except Exception as e:
+        logger.error(f"Markdown Error: {e}")
+        await update.message.reply_text(msg.replace("*", "").replace("`", ""), reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -327,23 +328,24 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 (telegram_user_id, username, categoria, subcategoria, tipo_entrada, fecha_creacion, resumen, contenido_completo, fecha_evento, datos_extra, estado)
                 VALUES (%s, %s, %s, %s, %s, NOW(), %s, %s, %s, %s, 'APPROVED') 
                 RETURNING id
-            """, (user_id, username, item.get('category'), item.get('subcategory'), item.get('entry_type'), item['summary'], item.get('full_content'), item.get('event_date'), Json(item.get('extra_data'))))
+            """, (user_id, username, item.get('category'), item.get('subcategory'), item.get('entry_type'), 
+                  item['summary'], item.get('full_content'), item.get('event_date'), Json(item.get('extra_data'))))
             new_id = cur.fetchone()[0]
             conn.commit()
             conn.close()
-            await query.edit_message_text(f"✅ Guardado (ID: {new_id})")
+            await query.edit_message_text(f"✅ Registro guardado exitosamente. (ID: {new_id})")
             context.user_data.pop('pending_save', None)
     elif query.data == "edit":
         context.user_data['state'] = 'WAITING_EDIT'
-        await query.edit_message_text("✏️ Escribe el cambio...")
+        await query.edit_message_text("✍️ Por favor, escriba los cambios o la nueva información:")
     elif query.data == "cancel":
-        await query.edit_message_text("❌ Cancelado.")
+        await query.edit_message_text("❌ Operación cancelada.")
         context.user_data.clear()
     elif query.data == "exec_sql":
         sql = context.user_data.get('pending_sql')
         if sql:
             res = await execute_sql(sql)
-            await query.edit_message_text(f"✅ Hecho. ({res})")
+            await query.edit_message_text(f"✅ Acción completada con éxito. ({res} filas afectadas)")
 
 if __name__ == '__main__':
     init_db()
@@ -351,5 +353,5 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler((filters.TEXT | filters.PHOTO | filters.VOICE) & (~filters.COMMAND), master_handler))
     app.add_handler(CallbackQueryHandler(button_callback))
-    print("🔥 JARVIS V2 RUNNING...")
+    print("🚀 JARVIS PROFESSIONAL SYSTEM RUNNING...")
     app.run_polling()
