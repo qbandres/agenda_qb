@@ -291,8 +291,33 @@ async def master_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif intent in ['DELETE', 'UPDATE']:
         sql = ai_response.get('sql_query')
         context.user_data['pending_sql'] = sql
+        
+        # --- PREVISUALIZACIÓN DE AFECTADOS ---
+        preview_msg = ""
+        try:
+            if "WHERE" in sql.upper():
+                where_clause = sql[sql.upper().index("WHERE"):]
+                preview_sql = f"SELECT * FROM agenda_personal {where_clause}"
+                # Evitar inyecciones o errores raros: asegurar que sea SELECT
+                if not preview_sql.strip().upper().startswith("SELECT"):
+                    preview_sql = ""
+                
+                if preview_sql:
+                    affected_rows = await execute_sql(preview_sql)
+                    if affected_rows:
+                        preview_msg = "\n\n⚠️ **Ítems Afectados:**\n"
+                        for r in affected_rows:
+                            rid = r.get('id')
+                            sub = r.get('subcategoria', 'General')
+                            resumen = escape_markdown(r.get('resumen', ''))
+                            preview_msg += f"• `ID {rid}`: *{sub}* - {resumen}\n"
+                    else:
+                        preview_msg = "\n\n⚠️ **Atención:** No se encontraron ítems que coincidan (0 afectados)."
+        except Exception as e:
+            logger.error(f"Error preview: {e}")
+
         await update.message.reply_text(
-            f"⚠️ **Confirmación de Acción**\n\n¿Desea ejecutar la siguiente operación?\n`{sql}`", 
+            f"⚠️ **Confirmación de Acción**\n\n¿Desea ejecutar la siguiente operación?\n`{sql}`{preview_msg}", 
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Ejecutar", callback_data="exec_sql"), InlineKeyboardButton("Cancelar", callback_data="cancel")]]),
             parse_mode='Markdown'
         )
