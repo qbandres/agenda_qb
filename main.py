@@ -29,7 +29,8 @@ def get_db_connection():
         host=os.getenv('POSTGRES_HOST'),
         database=os.getenv('POSTGRES_DB'),
         user=os.getenv('POSTGRES_USER'),
-        password=os.getenv('POSTGRES_PASSWORD')
+        password=os.getenv('POSTGRES_PASSWORD'),
+        port=os.getenv('POSTGRES_PORT', '5432')
     )
 
 def init_db():
@@ -109,12 +110,16 @@ NIVEL 1: CONTEXTO (Campo `categoria`)
    - 'ENTRETENIMIENTO': Ocio general.
 
 NIVEL 2: SUBCATEGORÍA (Campo `subcategoria`)
-   - Sé específico: "Cine", "Música", "Libros", "Reunión", "Compras", "Curso Incae".
+   - PARA 'TRABAJO': DEBE ser el nombre del PROYECTO. Ej: "BX-003", "Agua de Floculantes", "Modificacion de barandas", "Malla perimetral". Si no se menciona proyecto, trata de inferirlo o usa "General".
+   - PARA OTRAS CATEGORÍAS: Sé específico: "Cine", "Música", "Libros", "Compras", "Curso Incae".
 
 NIVEL 3: TIPO (Campo `tipo_entrada`)
-   - 'TAREA', 'RECORDATORIO', 'NOTA', 'CULTURA' (para arte/ocio), 'GASTO'.
+   - 'TAREA', 'RECORDATORIO', 'NOTA', 'CULTURA', 'GASTO'.
 
-### 2. REGLAS SQL PARA BÚSQUEDAS (CRÍTICO):
+### 2. ESTADO (Campo `estado`)
+   - Solo usar: 'Open' o 'Closed'.
+
+### 3. REGLAS SQL PARA BÚSQUEDAS (CRÍTICO):
 - **BÚSQUEDA PROFUNDA:** Cuando el usuario busque un tema (ej: "películas"), NO busques solo en categoría. Debes buscar coincidencias en `categoria`, `subcategoria` Y `resumen` usando `OR`.
   - Ejemplo para "películas": 
     `SELECT * FROM agenda_personal WHERE telegram_user_id = {user_id} AND (subcategoria ILIKE '%pelicula%' OR subcategoria ILIKE '%cine%' OR resumen ILIKE '%pelicula%' OR resumen ILIKE '%cine%' OR resumen ILIKE '%avatar%')`
@@ -128,12 +133,13 @@ NIVEL 3: TIPO (Campo `tipo_entrada`)
   "sql_query": "SELECT ...",
   "save_data": {{
       "category": "TRABAJO...",
-      "subcategory": "Ej: Cine, Música...",
+      "subcategory": "Ej: BX-003, Agua de Floculantes...",
       "entry_type": "TAREA...",
       "summary": "...",
       "full_content": "...",
       "event_date": "YYYY-MM-DD HH:MM:SS" (or null),
-      "extra_data": {{}}
+      "extra_data": {{}},
+      "status": "Open"
   }},
   "user_reply": "..."
 }}
