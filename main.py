@@ -117,11 +117,16 @@ async def execute_sql(query):
 
 # --- NUEVO: OBTENER CATEGORÍAS DEL USUARIO DESDE LA DB ---
 async def get_user_categories(username):
-    query = f"SELECT categoria, subcategoria FROM categorias_agenda WHERE username = '{username}' AND estado = 'ACTIVO'"
+    # Usamos ILIKE para ignorar mayúsculas/minúsculas en el usuario
+    query = f"SELECT categoria, subcategoria FROM categorias_agenda WHERE username ILIKE '{username}' AND estado = 'ACTIVO'"
     try:
         results = await execute_sql(query)
+        
+        # LOG PARA DEBUG: Te dirá en la consola si está encontrando la lista o no
+        logger.info(f"Buscando categorías para el usuario '{username}'. Resultados encontrados: {len(results) if results else 0}")
+        
         if not results:
-            return "No tienes categorías configuradas."
+            return "No tienes categorías configuradas. USA SIEMPRE 'LIBRE'."
         
         cat_map = {}
         for r in results:
@@ -137,22 +142,24 @@ async def get_user_categories(username):
         return prompt_text
     except Exception as e:
         logger.error(f"Error cargando categorías: {e}")
-        return ""
+        return "USA SIEMPRE 'LIBRE'."
 
 # --- CEREBRO IA (MEJORADO PARA TABLA DINÁMICA) ---
 def get_system_prompt(user_id, username, categorias_dinamicas):
     return f"""
-Actúas como "Jarvis", un Asistente Personal Ejecutivo para @{username}.
+Eres "Jarvis", asistente estricto de @{username}.
 Gestionas la tabla `agenda_personal` en PostgreSQL.
 
-### 1. JERARQUÍA DE CLASIFICACIÓN (ESTRICTA):
-Basado en la base de datos, estas son las únicas categorías y subcategorías (proyectos) válidas para este usuario:
+🚨 REGLAS DE ORO PARA CATEGORÍAS (CUMPLIMIENTO OBLIGATORIO) 🚨
+ESTÁ ESTRICTAMENTE PROHIBIDO inventar subcategorías (como "Construcción", "Varios", etc.). 
+Tus ÚNICAS opciones válidas son las de esta lista:
 {categorias_dinamicas}
 
-⚠️ REGLA CRÍTICA PARA ASIGNACIÓN:
-- Tienes PROHIBIDO inventar subcategorías. Debes buscar la que mejor encaje de la lista de arriba.
-- Si el usuario menciona algo que NO encaja claramente en ninguna de las subcategorías de la lista, debes clasificar la `category` como "LIBRE" y la `subcategory` como "LIBRE".
-- Cuando asignes "LIBRE", utiliza el campo `user_reply` para comunicarle al usuario que no encontraste un proyecto coincidente y PREGÚNTALE si está de acuerdo en guardarlo como LIBRE o prefiere crear una categoría nueva.
+🧠 INSTRUCCIONES DE MAPEO INTELIGENTE:
+El usuario hablará de forma coloquial o abreviada. DEBES esforzarte en conectar su frase con la lista oficial.
+- Ejemplo: Si dice "box003", "cajon bx", debes mapearlo a "Modificación del Cajón Box 3710-BX-003 (Ingeniería)" o el de montaje.
+- Ejemplo: Si dice "barandas", usa "Estandarización de barandas en Planta".
+- Si a pesar de intentarlo el tema NO existe en la lista, usa EXACTAMENTE la palabra "LIBRE" en category y subcategory.
 
 NIVEL 3: TIPO (Campo `tipo_entrada`)
    - 'TAREA', 'RECORDATORIO', 'NOTA', 'CULTURA', 'GASTO'.
@@ -160,19 +167,19 @@ NIVEL 3: TIPO (Campo `tipo_entrada`)
 ### 2. ESTADO (Campo `estado`)
    - Solo usar: 'Open' o 'Closed'.
 
-### 3. REGLAS SQL PARA BÚSQUEDAS (CRÍTICO):
-- **BÚSQUEDA PROFUNDA:** Cuando el usuario busque un tema, busca coincidencias en `categoria`, `subcategoria` Y `resumen` usando `OR`.
-- **PRIVACIDAD:** SIEMPRE incluye `AND telegram_user_id = {user_id}`.
-- **ORDEN:** Siempre `ORDER BY categoria ASC, fecha_evento ASC`.
+### 3. REGLAS SQL PARA BÚSQUEDAS:
+- Usa OR y busca coincidencias con ILIKE '%termino%' en `categoria`, `subcategoria` Y `resumen`.
+- SIEMPRE incluye `AND telegram_user_id = {user_id}`.
+- ORDEN: `ORDER BY categoria ASC, fecha_evento ASC`.
 
-### FORMATO JSON:
+### FORMATO JSON ESPERADO:
 {{
   "intent": "SAVE" | "QUERY" | "DELETE" | "UPDATE",
-  "reasoning": "...",
+  "reasoning": "Explica brevemente por qué elegiste esa categoría o si no la encontraste",
   "sql_query": "SELECT ...",
   "save_data": {{
-      "category": "Una categoría de la lista o LIBRE",
-      "subcategory": "La subcategoría exacta de la lista o LIBRE",
+      "category": "CATEGORIA DE LA LISTA o LIBRE",
+      "subcategory": "SUBCATEGORIA EXACTA DE LA LISTA o LIBRE",
       "entry_type": "TAREA...",
       "summary": "...",
       "full_content": "...",
@@ -180,7 +187,7 @@ NIVEL 3: TIPO (Campo `tipo_entrada`)
       "extra_data": {{}},
       "status": "Open"
   }},
-  "user_reply": "Mensaje normal, O pregunta si usaste la categoría LIBRE."
+  "user_reply": "Si usaste LIBRE, pregunta amablemente si quiere crear esa categoría. Si mapeaste con éxito, confirma normalmente."
 }}
 """
 
