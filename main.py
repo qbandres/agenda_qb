@@ -52,7 +52,7 @@ def init_db():
                 contenido_completo TEXT,
                 fecha_evento TIMESTAMP,
                 datos_extra JSONB,
-                estado VARCHAR(20) DEFAULT 'APPROVED'
+                estado VARCHAR(20) DEFAULT 'Open'
             );
         """)
         
