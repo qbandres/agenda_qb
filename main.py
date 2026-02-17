@@ -117,16 +117,16 @@ async def execute_sql(query):
 
 # --- NUEVO: OBTENER CATEGORÍAS DEL USUARIO DESDE LA DB ---
 async def get_user_categories(username):
-    # Usamos ILIKE para ignorar mayúsculas/minúsculas en el usuario
-    query = f"SELECT categoria, subcategoria FROM categorias_agenda WHERE username ILIKE '{username}' AND estado = 'ACTIVO'"
+    # Usamos TRIM e ILIKE para evitar errores por espacios invisibles o mayúsculas
+    query = f"SELECT categoria, subcategoria FROM categorias_agenda WHERE TRIM(username) ILIKE TRIM('{username}') AND estado = 'ACTIVO'"
     try:
         results = await execute_sql(query)
         
-        # LOG PARA DEBUG: Te dirá en la consola si está encontrando la lista o no
-        logger.info(f"Buscando categorías para el usuario '{username}'. Resultados encontrados: {len(results) if results else 0}")
+        # 🚨 ESTE LOG ES VITAL PARA DESCUBRIR EL PROBLEMA 🚨
+        logger.info(f"🔍 Buscando proyectos para: '{username}'. Encontrados: {len(results) if results else 0}")
         
         if not results:
-            return "No tienes categorías configuradas. USA SIEMPRE 'LIBRE'."
+            return "ESTE USUARIO NO TIENE LISTA. USA CATEGORIA 'LIBRE' Y SUBCATEGORIA 'LIBRE'."
         
         cat_map = {}
         for r in results:
@@ -134,60 +134,62 @@ async def get_user_categories(username):
             sub = r.get('subcategoria', '')
             if cat not in cat_map:
                 cat_map[cat] = []
-            cat_map[cat].append(sub)
+            # Envolvemos en comillas para forzar formato exacto
+            cat_map[cat].append(f'"{sub}"')
             
-        prompt_text = ""
+        prompt_text = "LISTA DE OPCIONES VÁLIDAS POR CATEGORÍA:\n"
         for cat, subs in cat_map.items():
-            prompt_text += f"\n   - '{cat}': [{', '.join(subs)}]"
+            prompt_text += f"- Si category es '{cat}', subcategory DEBE SER EXACTAMENTE UNA DE ESTAS: [{', '.join(subs)}]\n"
+        
         return prompt_text
     except Exception as e:
         logger.error(f"Error cargando categorías: {e}")
-        return "USA SIEMPRE 'LIBRE'."
+        return "USA 'LIBRE'"
 
 # --- CEREBRO IA (MEJORADO PARA TABLA DINÁMICA) ---
 def get_system_prompt(user_id, username, categorias_dinamicas):
     return f"""
-Eres "Jarvis", asistente estricto de @{username}.
-Gestionas la tabla `agenda_personal` en PostgreSQL.
+Eres "Jarvis", un clasificador de base de datos ultra-rígido.
+Tu único trabajo es mapear el input del usuario a su lista oficial de proyectos.
 
-🚨 REGLAS DE ORO PARA CATEGORÍAS (CUMPLIMIENTO OBLIGATORIO) 🚨
-ESTÁ ESTRICTAMENTE PROHIBIDO inventar subcategorías (como "Construcción", "Varios", etc.). 
-Tus ÚNICAS opciones válidas son las de esta lista:
+🚨 REGLA DE ORO (PENALIZACIÓN SI SE INCUMPLE) 🚨
+ESTÁ ESTRICTAMENTE PROHIBIDO inventar, resumir o modificar los nombres. NO PUEDES usar palabras como "Construcción", "Ingeniería", "Proyecto Barandas", etc., a menos que estén literalmente en la lista.
+
 {categorias_dinamicas}
 
 🧠 INSTRUCCIONES DE MAPEO INTELIGENTE:
-El usuario hablará de forma coloquial o abreviada. DEBES esforzarte en conectar su frase con la lista oficial.
-- Ejemplo: Si dice "box003", "cajon bx", debes mapearlo a "Modificación del Cajón Box 3710-BX-003 (Ingeniería)" o el de montaje.
-- Ejemplo: Si dice "barandas", usa "Estandarización de barandas en Planta".
-- Si a pesar de intentarlo el tema NO existe en la lista, usa EXACTAMENTE la palabra "LIBRE" en category y subcategory.
+- Analiza el mensaje (ej. "box003", "barandas", "floculantes").
+- Busca la coincidencia más lógica dentro de la LISTA DE OPCIONES VÁLIDAS.
+- COPIA Y PEGA el nombre EXACTO de la lista al campo "subcategory".
+- Si no existe nada similar en la lista, usa EXACTAMENTE "LIBRE" en category y "LIBRE" en subcategory.
 
 NIVEL 3: TIPO (Campo `tipo_entrada`)
    - 'TAREA', 'RECORDATORIO', 'NOTA', 'CULTURA', 'GASTO'.
 
-### 2. ESTADO (Campo `estado`)
+### ESTADO (Campo `estado`)
    - Solo usar: 'Open' o 'Closed'.
 
-### 3. REGLAS SQL PARA BÚSQUEDAS:
-- Usa OR y busca coincidencias con ILIKE '%termino%' en `categoria`, `subcategoria` Y `resumen`.
-- SIEMPRE incluye `AND telegram_user_id = {user_id}`.
-- ORDEN: `ORDER BY categoria ASC, fecha_evento ASC`.
+### REGLAS SQL PARA BÚSQUEDAS:
+- Usa OR y busca coincidencias con ILIKE '%termino%' en categoria, subcategoria Y resumen.
+- SIEMPRE incluye AND telegram_user_id = {user_id}.
+- ORDEN: ORDER BY categoria ASC, fecha_evento ASC.
 
-### FORMATO JSON ESPERADO:
+FORMATO JSON ESPERADO:
 {{
   "intent": "SAVE" | "QUERY" | "DELETE" | "UPDATE",
-  "reasoning": "Explica brevemente por qué elegiste esa categoría o si no la encontraste",
+  "reasoning": "Explica qué frase del usuario conectaste con qué proyecto exacto de la lista.",
   "sql_query": "SELECT ...",
   "save_data": {{
-      "category": "CATEGORIA DE LA LISTA o LIBRE",
-      "subcategory": "SUBCATEGORIA EXACTA DE LA LISTA o LIBRE",
-      "entry_type": "TAREA...",
+      "category": "CATEGORIA EXACTA DE LA LISTA o LIBRE",
+      "subcategory": "SUBCATEGORIA EXACTA DE LA LISTA o LIBRE. NUNCA INVENTES PALABRAS.",
+      "entry_type": "TAREA",
       "summary": "...",
       "full_content": "...",
       "event_date": "YYYY-MM-DD HH:MM:SS" (or null),
       "extra_data": {{}},
       "status": "Open"
   }},
-  "user_reply": "Si usaste LIBRE, pregunta amablemente si quiere crear esa categoría. Si mapeaste con éxito, confirma normalmente."
+  "user_reply": "Mensaje de confirmación corto. Si usaste LIBRE, pregunta amablemente si quiere crear esa categoría."
 }}
 """
 
