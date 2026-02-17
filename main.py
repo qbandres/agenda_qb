@@ -110,7 +110,10 @@ NIVEL 1: CONTEXTO (Campo `categoria`)
    - 'ENTRETENIMIENTO': Ocio general.
 
 NIVEL 2: SUBCATEGORÍA (Campo `subcategoria`)
-   - PARA 'TRABAJO': DEBE ser el nombre del PROYECTO. Ej: "BX-003", "Agua de Floculantes", "Modificacion de barandas", "Malla perimetral". Si no se menciona proyecto, trata de inferirlo o usa "General".
+   - PARA 'TRABAJO': DEBE ser el nombre del PROYECTO. Ej: "BX-003", "Agua de Floculantes", "Modificacion de barandas", "Malla perimetral". 
+     ⚠️ CRÍTICO: NO uses el tipo de documento o actividad (como "SOW", "Informe", "Reunión", "Cotización") como subcategoría.
+     Ejemplo: Si dice "SOW para Alimentador de bolas", Subcategoría="Alimentador de bolas".
+     Si no se menciona proyecto, trata de inferirlo o usa "General".
    - PARA OTRAS CATEGORÍAS: Sé específico: "Cine", "Música", "Libros", "Compras", "Curso Incae".
 
 NIVEL 3: TIPO (Campo `tipo_entrada`)
