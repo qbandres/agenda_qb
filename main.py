@@ -96,25 +96,63 @@ def encode_image(image_path):
     with open(image_path, "rb") as image_file:
         return base64.b64encode(image_file.read()).decode('utf-8')
 
-# --- CEREBRO IA (MEJORADO PARA BÚSQUEDA PROFUNDA) ---
-def get_system_prompt(user_id, username):
+async def execute_sql(query):
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        logger.info(f"SQL Exec: {query}")
+        cur.execute(query)
+        if cur.description:
+            rows = cur.fetchall()
+            cols = [desc[0] for desc in cur.description]
+            result = [dict(zip(cols, row)) for row in rows]
+        else:
+            conn.commit()
+            result = cur.rowcount
+        conn.close()
+        return result
+    except Exception as e:
+        logger.error(f"SQL Error: {e}")
+        return None
+
+# --- NUEVO: OBTENER CATEGORÍAS DEL USUARIO DESDE LA DB ---
+async def get_user_categories(username):
+    query = f"SELECT categoria, subcategoria FROM categorias_agenda WHERE username = '{username}' AND estado = 'ACTIVO'"
+    try:
+        results = await execute_sql(query)
+        if not results:
+            return "No tienes categorías configuradas."
+        
+        cat_map = {}
+        for r in results:
+            cat = r.get('categoria', '')
+            sub = r.get('subcategoria', '')
+            if cat not in cat_map:
+                cat_map[cat] = []
+            cat_map[cat].append(sub)
+            
+        prompt_text = ""
+        for cat, subs in cat_map.items():
+            prompt_text += f"\n   - '{cat}': [{', '.join(subs)}]"
+        return prompt_text
+    except Exception as e:
+        logger.error(f"Error cargando categorías: {e}")
+        return ""
+
+# --- CEREBRO IA (MEJORADO PARA TABLA DINÁMICA) ---
+def get_system_prompt(user_id, username, categorias_dinamicas):
     return f"""
 Actúas como "Jarvis", un Asistente Personal Ejecutivo para @{username}.
 Gestionas la tabla `agenda_personal` en PostgreSQL.
 
-### 1. JERARQUÍA DE CLASIFICACIÓN:
-NIVEL 1: CONTEXTO (Campo `categoria`) 
-   - 'TRABAJO': Construcción, ingeniería, SOW, clientes.
-   - 'PERSONAL': Familia, hogar, salud, gastos.
-   - 'ACADEMICO': Cursos, Data Science, Python, estudio.
-   - 'ENTRETENIMIENTO': Ocio general.
+### 1. JERARQUÍA DE CLASIFICACIÓN (ESTRICTA):
+Basado en la base de datos, estas son las únicas categorías y subcategorías (proyectos) válidas para este usuario:
+{categorias_dinamicas}
 
-NIVEL 2: SUBCATEGORÍA (Campo `subcategoria`)
-   - PARA 'TRABAJO': DEBE ser el nombre del PROYECTO. Ej: "BX-003", "Agua de Floculantes", "Modificacion de barandas", "Malla perimetral". 
-     ⚠️ CRÍTICO: NO uses el tipo de documento o actividad (como "SOW", "Informe", "Reunión", "Cotización") como subcategoría.
-     Ejemplo: Si dice "SOW para Alimentador de bolas", Subcategoría="Alimentador de bolas".
-     Si no se menciona proyecto, trata de inferirlo o usa "General".
-   - PARA OTRAS CATEGORÍAS: Sé específico: "Cine", "Música", "Libros", "Compras", "Curso Incae".
+⚠️ REGLA CRÍTICA PARA ASIGNACIÓN:
+- Tienes PROHIBIDO inventar subcategorías. Debes buscar la que mejor encaje de la lista de arriba.
+- Si el usuario menciona algo que NO encaja claramente en ninguna de las subcategorías de la lista, debes clasificar la `category` como "LIBRE" y la `subcategory` como "LIBRE".
+- Cuando asignes "LIBRE", utiliza el campo `user_reply` para comunicarle al usuario que no encontraste un proyecto coincidente y PREGÚNTALE si está de acuerdo en guardarlo como LIBRE o prefiere crear una categoría nueva.
 
 NIVEL 3: TIPO (Campo `tipo_entrada`)
    - 'TAREA', 'RECORDATORIO', 'NOTA', 'CULTURA', 'GASTO'.
@@ -123,9 +161,7 @@ NIVEL 3: TIPO (Campo `tipo_entrada`)
    - Solo usar: 'Open' o 'Closed'.
 
 ### 3. REGLAS SQL PARA BÚSQUEDAS (CRÍTICO):
-- **BÚSQUEDA PROFUNDA:** Cuando el usuario busque un tema (ej: "películas"), NO busques solo en categoría. Debes buscar coincidencias en `categoria`, `subcategoria` Y `resumen` usando `OR`.
-  - Ejemplo para "películas": 
-    `SELECT * FROM agenda_personal WHERE telegram_user_id = {user_id} AND (subcategoria ILIKE '%pelicula%' OR subcategoria ILIKE '%cine%' OR resumen ILIKE '%pelicula%' OR resumen ILIKE '%cine%' OR resumen ILIKE '%avatar%')`
+- **BÚSQUEDA PROFUNDA:** Cuando el usuario busque un tema, busca coincidencias en `categoria`, `subcategoria` Y `resumen` usando `OR`.
 - **PRIVACIDAD:** SIEMPRE incluye `AND telegram_user_id = {user_id}`.
 - **ORDEN:** Siempre `ORDER BY categoria ASC, fecha_evento ASC`.
 
@@ -135,8 +171,8 @@ NIVEL 3: TIPO (Campo `tipo_entrada`)
   "reasoning": "...",
   "sql_query": "SELECT ...",
   "save_data": {{
-      "category": "TRABAJO...",
-      "subcategory": "Ej: BX-003, Agua de Floculantes...",
+      "category": "Una categoría de la lista o LIBRE",
+      "subcategory": "La subcategoría exacta de la lista o LIBRE",
       "entry_type": "TAREA...",
       "summary": "...",
       "full_content": "...",
@@ -144,12 +180,12 @@ NIVEL 3: TIPO (Campo `tipo_entrada`)
       "extra_data": {{}},
       "status": "Open"
   }},
-  "user_reply": "..."
+  "user_reply": "Mensaje normal, O pregunta si usaste la categoría LIBRE."
 }}
 """
 
-async def process_with_ai(content_type, content_data, current_date, user_id, username):
-    sys_instruction = get_system_prompt(user_id, username)
+async def process_with_ai(content_type, content_data, current_date, user_id, username, categorias_dinamicas):
+    sys_instruction = get_system_prompt(user_id, username, categorias_dinamicas)
     messages = [{"role": "system", "content": f"{sys_instruction}\n\nFecha Actual: {current_date}"}]
 
     if content_type == 'audio':
@@ -190,25 +226,6 @@ async def process_with_ai(content_type, content_data, current_date, user_id, use
 
 # --- MANEJADORES ---
 
-async def execute_sql(query):
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        logger.info(f"SQL Exec: {query}")
-        cur.execute(query)
-        if cur.description:
-            rows = cur.fetchall()
-            cols = [desc[0] for desc in cur.description]
-            result = [dict(zip(cols, row)) for row in rows]
-        else:
-            conn.commit()
-            result = cur.rowcount
-        conn.close()
-        return result
-    except Exception as e:
-        logger.error(f"SQL Error: {e}")
-        return None
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     user = update.effective_user.first_name
@@ -218,6 +235,9 @@ async def master_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     username = update.effective_user.username or update.effective_user.first_name
     current_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    # --- NUEVO: Extraemos la lista de proyectos en tiempo real para este usuario ---
+    categorias_dinamicas = await get_user_categories(username)
     
     text_input = update.message.text or ""
 
@@ -230,7 +250,7 @@ async def master_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🔄 Procesando corrección...")
         correction_prompt = f"DATOS ORIGINALES: {json.dumps(original_data)}\nCORRECCIÓN SOLICITADA: '{text_input}'\nGenera el nuevo JSON de guardado."
         context.user_data['state'] = None
-        ai_response = await process_with_ai('text', correction_prompt, current_date, user_id, username)
+        ai_response = await process_with_ai('text', correction_prompt, current_date, user_id, username, categorias_dinamicas)
         if ai_response and ai_response.get('intent') == 'SAVE':
              await show_save_confirmation(update, context, ai_response)
         else:
@@ -239,20 +259,20 @@ async def master_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     ai_response = None
     if text_input:
-        ai_response = await process_with_ai('text', text_input, current_date, user_id, username)
+        ai_response = await process_with_ai('text', text_input, current_date, user_id, username, categorias_dinamicas)
     elif update.message.photo:
         await update.message.reply_text("👁️ Analizando imagen...")
         photo_file = await update.message.photo[-1].get_file()
         with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as temp:
             await photo_file.download_to_drive(temp.name)
-            ai_response = await process_with_ai('image', temp.name, current_date, user_id, username)
+            ai_response = await process_with_ai('image', temp.name, current_date, user_id, username, categorias_dinamicas)
             os.remove(temp.name)
     elif update.message.voice:
         await update.message.reply_text("🎧 Procesando audio...")
         voice_file = await update.message.voice.get_file()
         with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as temp:
             await voice_file.download_to_drive(temp.name)
-            ai_response = await process_with_ai('audio', temp.name, current_date, user_id, username)
+            ai_response = await process_with_ai('audio', temp.name, current_date, user_id, username, categorias_dinamicas)
             os.remove(temp.name)
 
     if not ai_response:
@@ -269,7 +289,6 @@ async def master_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not results:
             await update.message.reply_text("ℹ️ No se encontraron registros que coincidan con su búsqueda.")
         else:
-            # --- VISUALIZADOR MEJORADO (Categoría + Subcategoría + Resumen) ---
             msg = "📑 **Resultados de Búsqueda**\n"
             current_cat = None
             
@@ -277,22 +296,17 @@ async def master_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 cat = r.get('categoria', 'GENERAL').upper()
                 sub = r.get('subcategoria', 'General')
                 
-                # Agrupamos visualmente por categoría principal
                 if cat != current_cat:
                     msg += f"\n📂 **{cat}**\n" + ("─" * 20) + "\n"
                     current_cat = cat
                 
-                # Datos de la fila
                 rid = r.get('id')
                 tipo = r.get('tipo_entrada', 'NOTA')
                 resumen = escape_markdown(r.get('resumen', ''))
                 date_val = r.get('fecha_evento')
                 date_str = f"📅 {date_val.strftime('%d/%m %H:%M')}" if date_val else ""
                 
-                # Icono según tipo
                 icon = {'TAREA': '📝', 'RECORDATORIO': '⏰', 'CULTURA': '🎭', 'GASTO': '💰'}.get(tipo, '🔹')
-                
-                # Formato final de línea: Icono ID | Subcategoría > Resumen
                 msg += f"{icon} `ID {rid}` | *{sub}*\n   └ {resumen} {date_str}\n\n"
 
             await update.message.reply_text(msg, parse_mode='Markdown')
@@ -301,13 +315,11 @@ async def master_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sql = ai_response.get('sql_query')
         context.user_data['pending_sql'] = sql
         
-        # --- PREVISUALIZACIÓN DE AFECTADOS ---
         preview_msg = ""
         try:
             if "WHERE" in sql.upper():
                 where_clause = sql[sql.upper().index("WHERE"):]
                 preview_sql = f"SELECT * FROM agenda_personal {where_clause}"
-                # Evitar inyecciones o errores raros: asegurar que sea SELECT
                 if not preview_sql.strip().upper().startswith("SELECT"):
                     preview_sql = ""
                 
@@ -341,6 +353,11 @@ async def show_save_confirmation(update, context, data):
 
     info = info_raw[0] if isinstance(info_raw, list) and len(info_raw) > 0 else info_raw
     context.user_data['pending_save'] = info
+    
+    # Extraemos el mensaje de la IA para mostrarlo junto con la confirmación
+    ai_msg = data.get('user_reply', '')
+    if ai_msg:
+        await update.message.reply_text(f"🤖 Jarvis: {ai_msg}")
     
     resumen = escape_markdown(info.get('summary') or "Sin resumen")
     categoria = escape_markdown(info.get('category') or "GENERAL")
