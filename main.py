@@ -56,6 +56,17 @@ def init_db():
             );
         """)
         
+        # Tabla de categorías por usuario
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS categorias_agenda (
+                id SERIAL PRIMARY KEY,
+                username VARCHAR(100) NOT NULL,
+                categoria VARCHAR(50) NOT NULL,
+                subcategoria VARCHAR(100) NOT NULL,
+                estado VARCHAR(20) DEFAULT 'ACTIVO'
+            );
+        """)
+
         # Asegurar columnas (Mantenemos tu lógica de migración DO $$)
         cur.execute("""
             DO $$ 
@@ -77,13 +88,6 @@ def init_db():
         logger.error(f"Error DB init: {e}")
 
 # --- UTILIDADES ---
-def clean_and_parse_json(text_response):
-    cleaned = text_response.replace("```json", "").replace("```", "").strip()
-    try:
-        return json.loads(cleaned)
-    except:
-        return None
-
 def escape_markdown(text):
     """Escapa caracteres especiales para evitar errores de Telegram BadRequest"""
     if not text: return ""
@@ -96,12 +100,12 @@ def encode_image(image_path):
     with open(image_path, "rb") as image_file:
         return base64.b64encode(image_file.read()).decode('utf-8')
 
-async def execute_sql(query):
+async def execute_sql(query, params=None):
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-        logger.info(f"SQL Exec: {query}")
-        cur.execute(query)
+        logger.info(f"SQL Exec: {query} | Params: {params}")
+        cur.execute(query, params)
         if cur.description:
             rows = cur.fetchall()
             cols = [desc[0] for desc in cur.description]
@@ -117,10 +121,10 @@ async def execute_sql(query):
 
 # --- NUEVO: OBTENER CATEGORÍAS DEL USUARIO DESDE LA DB ---
 async def get_user_categories(username):
-    # Usamos TRIM e ILIKE para evitar errores por espacios invisibles o mayúsculas
-    query = f"SELECT categoria, subcategoria FROM categorias_agenda WHERE TRIM(username) ILIKE TRIM('{username}') AND estado = 'ACTIVO'"
+    # Query parametrizada para evitar SQL injection
+    query = "SELECT categoria, subcategoria FROM categorias_agenda WHERE TRIM(username) ILIKE TRIM(%s) AND estado = 'ACTIVO'"
     try:
-        results = await execute_sql(query)
+        results = await execute_sql(query, (username,))
         
         # 🚨 ESTE LOG ES VITAL PARA DESCUBRIR EL PROBLEMA 🚨
         logger.info(f"🔍 Buscando proyectos para: '{username}'. Encontrados: {len(results) if results else 0}")
@@ -170,9 +174,12 @@ NIVEL 3: TIPO (Campo `tipo_entrada`)
    - Solo usar: 'Open' o 'Closed'.
 
 ### REGLAS SQL PARA BÚSQUEDAS:
+- La tabla se llama EXACTAMENTE: agenda_personal. NUNCA uses otro nombre.
+- Columnas disponibles: id, telegram_user_id, username, categoria, subcategoria, tipo_entrada, resumen, contenido_completo, fecha_evento, datos_extra, estado, fecha_creacion.
 - Usa OR y busca coincidencias con ILIKE '%termino%' en categoria, subcategoria Y resumen.
 - SIEMPRE incluye AND telegram_user_id = {user_id}.
 - ORDEN: ORDER BY categoria ASC, fecha_evento ASC.
+- Si el usuario pide "toda la agenda" o "todo", usa: SELECT * FROM agenda_personal WHERE telegram_user_id = {user_id} ORDER BY categoria ASC, fecha_evento ASC.
 
 FORMATO JSON ESPERADO:
 {{
@@ -294,8 +301,11 @@ async def master_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_save_confirmation(update, context, ai_response)
     elif intent == 'QUERY':
         sql = ai_response.get('sql_query')
+        logger.info(f"QUERY SQL generado: {sql}")
         results = await execute_sql(sql)
-        if not results:
+        if results is None:
+            await update.message.reply_text("❌ Error al ejecutar la consulta. Revisa los logs.")
+        elif not results:
             await update.message.reply_text("ℹ️ No se encontraron registros que coincidan con su búsqueda.")
         else:
             msg = "📑 **Resultados de Búsqueda**\n"
