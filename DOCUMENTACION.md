@@ -66,7 +66,12 @@
 
 ```
 2026-agenda_personal/
-├── main.py              # Toda la lógica de la aplicación
+├── main.py              # Punto de entrada: init_db + handlers + run_polling
+├── config.py            # Variables compartidas: logger + client OpenAI
+├── db.py                # get_db_connection, init_db, execute_sql, get_user_categories
+├── ai.py                # get_system_prompt, process_with_ai
+├── handlers.py          # start, master_handler, show_save_confirmation, button_callback
+├── utils.py             # escape_markdown, encode_image
 ├── requirements.txt     # Dependencias Python
 ├── Dockerfile           # Imagen Docker (python:3.11-slim, multi-arch)
 ├── docker-compose.yml   # Servicio bot + red externa (home-server-net)
@@ -74,7 +79,16 @@
 └── DOCUMENTACION.md     # Este archivo
 ```
 
-> **Nota:** La aplicación actualmente opera con un solo archivo `main.py`. Ver sección [Mejoras Pendientes](#mejoras-pendientes) para la estructura modular recomendada.
+### Dependencias entre módulos
+
+```
+main.py
+  ├── config.py       (sin deps internas)
+  ├── db.py           → config.py
+  ├── utils.py        (sin deps internas)
+  ├── ai.py           → config.py, utils.py
+  └── handlers.py     → config.py, db.py, ai.py, utils.py
+```
 
 ---
 
@@ -313,17 +327,7 @@ docker network create home-server-net
 - [ ] **Validación del SQL generado por IA**: `execute_sql` ejecuta cualquier SQL. Agregar whitelist de operaciones permitidas.
 
 ### Arquitectura
-- [ ] Separar el código en módulos:
-  ```
-  main.py           # Sólo punto de entrada
-  config.py         # Variables de entorno
-  db/connection.py  # Pool de conexiones
-  db/operations.py  # Queries
-  ai/processor.py   # Llamadas a OpenAI
-  ai/prompts.py     # Prompts del sistema
-  handlers/         # Handlers de Telegram separados
-  utils/helpers.py  # Funciones utilitarias
-  ```
+- [x] Separar el código en módulos (`config.py`, `db.py`, `ai.py`, `handlers.py`, `utils.py`)
 - [ ] Usar pool de conexiones (`psycopg2.pool`) en lugar de abrir/cerrar por operación
 - [ ] Agregar creación de `categorias_agenda` en `init_db()`
 
