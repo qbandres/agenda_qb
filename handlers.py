@@ -13,6 +13,16 @@ from ai import process_with_ai
 from utils import escape_markdown
 
 
+async def send_long_message(update, text, chunk_size=4000):
+    """Envía un mensaje partiéndolo en chunks si supera el límite de Telegram (4096 chars)."""
+    for i in range(0, len(text), chunk_size):
+        chunk = text[i:i + chunk_size]
+        try:
+            await update.message.reply_text(chunk, parse_mode='Markdown')
+        except Exception:
+            await update.message.reply_text(chunk.replace("*", "").replace("`", "").replace("_", ""))
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     user = update.effective_user.first_name
@@ -109,7 +119,7 @@ async def master_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     icon = {'TAREA': '📝', 'RECORDATORIO': '⏰', 'CULTURA': '🎭', 'GASTO': '💰'}.get(tipo, '🔹')
                     msg += f"{icon} `ID {rid}` | *{sub}*\n   └ {resumen} {date_str}\n\n"
 
-            await update.message.reply_text(msg, parse_mode='Markdown')
+            await send_long_message(update, msg)
 
     elif intent in ['DELETE', 'UPDATE']:
         sql = ai_response.get('sql_query')
