@@ -8,9 +8,41 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
 from config import logger
-from db import get_db_connection, execute_sql, get_user_categories, register_user, is_user_registered
+from db import get_db_connection, execute_sql, get_user_categories, register_user, is_user_registered, get_upcoming_reminders, mark_reminder_sent
 from ai import process_with_ai
 from utils import escape_markdown
+
+
+REMINDER_INTERVALS = [
+    (60, "⏰ *Recordatorio en 1 HORA*"),
+    (5, "⚠️ *Recordatorio en 5 MINUTOS*"),
+    (1, "🚨 *Recordatorio en 1 MINUTO*"),
+]
+
+
+async def check_reminders(context: ContextTypes.DEFAULT_TYPE):
+    """Job periódico que revisa eventos próximos y envía alertas."""
+    for minutes, alert_title in REMINDER_INTERVALS:
+        label = f"{minutes}m"
+        events = get_upcoming_reminders(minutes)
+        for event in events:
+            fecha = event['fecha_evento'].strftime('%d/%m/%Y %H:%M')
+            msg = (
+                f"{alert_title}\n\n"
+                f"📂 {event.get('categoria', 'GENERAL')} › {event.get('subcategoria', 'General')}\n"
+                f"📝 {event.get('resumen', 'Sin detalle')}\n"
+                f"📅 {fecha}"
+            )
+            try:
+                await context.bot.send_message(
+                    chat_id=event['telegram_user_id'],
+                    text=msg,
+                    parse_mode='Markdown'
+                )
+                mark_reminder_sent(event['id'], label)
+                logger.info(f"Recordatorio {label} enviado - ID:{event['id']} User:{event['telegram_user_id']}")
+            except Exception as e:
+                logger.error(f"Error enviando recordatorio: {e}")
 
 
 async def send_long_message(update, text, chunk_size=4000):

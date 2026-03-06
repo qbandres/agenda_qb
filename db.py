@@ -84,6 +84,10 @@ def init_db():
                 IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='categorias_agenda' AND column_name='telegram_user_id') THEN
                     ALTER TABLE categorias_agenda ADD COLUMN telegram_user_id BIGINT;
                 END IF;
+
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='agenda_personal' AND column_name='notificaciones_enviadas') THEN
+                    ALTER TABLE agenda_personal ADD COLUMN notificaciones_enviadas JSONB DEFAULT '[]'::jsonb;
+                END IF;
             END $$;
         """)
 
@@ -147,6 +151,48 @@ def is_user_registered(telegram_user_id):
     except Exception as e:
         logger.error(f"Error verificando usuario: {e}")
         return False
+
+
+def get_upcoming_reminders(minutes_before, tolerance=1):
+    """Busca eventos que estén a 'minutes_before' minutos de ocurrir (±tolerance)."""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        label = f"{minutes_before}m"
+        cur.execute("""
+            SELECT id, telegram_user_id, categoria, subcategoria, resumen, fecha_evento
+            FROM agenda_personal
+            WHERE fecha_evento IS NOT NULL
+              AND estado != 'Closed'
+              AND fecha_evento BETWEEN NOW() + INTERVAL '%s minutes' - INTERVAL '%s minutes'
+                                    AND NOW() + INTERVAL '%s minutes' + INTERVAL '%s minutes'
+              AND NOT (notificaciones_enviadas @> %s::jsonb)
+        """, (minutes_before, tolerance, minutes_before, tolerance, f'["{label}"]'))
+        cols = [desc[0] for desc in cur.description]
+        rows = [dict(zip(cols, row)) for row in cur.fetchall()]
+        cur.close()
+        conn.close()
+        return rows
+    except Exception as e:
+        logger.error(f"Error buscando recordatorios: {e}")
+        return []
+
+
+def mark_reminder_sent(record_id, label):
+    """Marca un recordatorio como enviado para no repetirlo."""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE agenda_personal
+            SET notificaciones_enviadas = COALESCE(notificaciones_enviadas, '[]'::jsonb) || %s::jsonb
+            WHERE id = %s
+        """, (f'["{label}"]', record_id))
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        logger.error(f"Error marcando recordatorio: {e}")
 
 
 async def execute_sql(query, params=None):
