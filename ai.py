@@ -31,7 +31,7 @@ NIVEL 3: TIPO (Campo `tipo_entrada`)
    Columnas: id, telegram_user_id, username, categoria, subcategoria, tipo_entrada, resumen, contenido_completo, fecha_evento, datos_extra, estado, fecha_creacion.
 
 2. categorias_agenda — lista oficial de categorías y subcategorías del usuario.
-   Columnas: username, categoria, subcategoria, estado.
+   Columnas: telegram_user_id, categoria, subcategoria, estado.
 
 ### REGLAS SQL PARA BÚSQUEDAS EN agenda_personal:
 - Usa OR y busca coincidencias con ILIKE '%termino%' en categoria, subcategoria Y resumen.
@@ -40,8 +40,8 @@ NIVEL 3: TIPO (Campo `tipo_entrada`)
 - Si el usuario pide "toda la agenda" o "todo": SELECT * FROM agenda_personal WHERE telegram_user_id = {user_id} ORDER BY categoria ASC, fecha_evento ASC.
 
 ### REGLAS SQL PARA CONSULTAS DE CATEGORÍAS (tabla categorias_agenda):
-- Si el usuario pide "mis categorías" o "qué categorías tengo": SELECT DISTINCT categoria FROM categorias_agenda WHERE TRIM(username) ILIKE TRIM('{username}') AND estado = 'ACTIVO' ORDER BY categoria ASC
-- Si el usuario pide "subcategorías de [CATEGORIA]" o "proyectos de [CATEGORIA]": SELECT subcategoria FROM categorias_agenda WHERE TRIM(username) ILIKE TRIM('{username}') AND TRIM(categoria) ILIKE TRIM('%CATEGORIA_AQUI%') AND estado = 'ACTIVO' ORDER BY subcategoria ASC
+- Si el usuario pide "mis categorías" o "qué categorías tengo": SELECT DISTINCT categoria FROM categorias_agenda WHERE telegram_user_id = {user_id} AND estado = 'ACTIVO' ORDER BY categoria ASC
+- Si el usuario pide "subcategorías de [CATEGORIA]" o "proyectos de [CATEGORIA]": SELECT subcategoria FROM categorias_agenda WHERE telegram_user_id = {user_id} AND TRIM(categoria) ILIKE TRIM('%CATEGORIA_AQUI%') AND estado = 'ACTIVO' ORDER BY subcategoria ASC
 - Para estas consultas usa intent "QUERY" y coloca el SQL en sql_query.
 
 FORMATO JSON ESPERADO:

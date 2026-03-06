@@ -8,7 +8,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
 from config import logger
-from db import get_db_connection, execute_sql, get_user_categories
+from db import get_db_connection, execute_sql, get_user_categories, register_user, is_user_registered
 from ai import process_with_ai
 from utils import escape_markdown
 
@@ -25,8 +25,26 @@ async def send_long_message(update, text, chunk_size=4000):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
-    user = update.effective_user.first_name
-    await update.message.reply_text(f"👋 **Hola {user}!**\nSoy Jarvis v2. Gestiono Tareas, Eventos y Recordatorios.")
+    user = update.effective_user
+    telegram_user_id = user.id
+    username = user.username or user.first_name
+    nombre = user.full_name
+
+    is_new = register_user(telegram_user_id, username, nombre)
+
+    if is_new:
+        await update.message.reply_text(
+            f"👋 **Bienvenido {user.first_name}!**\n\n"
+            f"Te has registrado exitosamente.\n"
+            f"Ya tienes categorías configuradas: *Trabajo, Entretenimiento, Personal y Recordatorio*.\n\n"
+            f"Envíame texto, fotos o audios y los organizaré por ti.",
+            parse_mode='Markdown'
+        )
+    else:
+        await update.message.reply_text(
+            f"👋 **Hola {user.first_name}!**\nSoy Jarvis v2. Gestiono Tareas, Eventos y Recordatorios.",
+            parse_mode='Markdown'
+        )
 
 
 async def master_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -34,7 +52,11 @@ async def master_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     username = update.effective_user.username or update.effective_user.first_name
     current_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    categorias_dinamicas = await get_user_categories(username)
+    if not is_user_registered(user_id):
+        await update.message.reply_text("⚠️ No estás registrado. Usa /start para comenzar.")
+        return
+
+    categorias_dinamicas = await get_user_categories(user_id)
 
     text_input = update.message.text or ""
 
