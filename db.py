@@ -124,10 +124,11 @@ def register_user(telegram_user_id, username, nombre):
 
         for categoria, subcategorias in DEFAULT_CATEGORIES.items():
             for sub in subcategorias:
-                cur.execute(
-                    "INSERT INTO categorias_agenda (telegram_user_id, username, categoria, subcategoria) VALUES (%s, %s, %s, %s)",
-                    (telegram_user_id, username, categoria, sub)
-                )
+                cur.execute("""
+                    INSERT INTO categorias_agenda (telegram_user_id, username, categoria, subcategoria)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT DO NOTHING
+                """, (telegram_user_id, username, categoria, sub))
 
         conn.commit()
         cur.close()
@@ -159,17 +160,20 @@ def get_upcoming_reminders(minutes_before, tolerance=1):
         conn = get_db_connection()
         cur = conn.cursor()
         label = f"{minutes_before}m"
+        min_minutes = minutes_before - tolerance
+        max_minutes = minutes_before + tolerance
         cur.execute("""
             SELECT id, telegram_user_id, categoria, subcategoria, resumen, fecha_evento
             FROM agenda_personal
             WHERE fecha_evento IS NOT NULL
               AND estado != 'Closed'
-              AND fecha_evento BETWEEN NOW() + INTERVAL '%s minutes' - INTERVAL '%s minutes'
-                                    AND NOW() + INTERVAL '%s minutes' + INTERVAL '%s minutes'
-              AND NOT (notificaciones_enviadas @> %s::jsonb)
-        """, (minutes_before, tolerance, minutes_before, tolerance, f'["{label}"]'))
+              AND fecha_evento BETWEEN NOW() + (%s * INTERVAL '1 minute')
+                                    AND NOW() + (%s * INTERVAL '1 minute')
+              AND NOT COALESCE(notificaciones_enviadas, '[]'::jsonb) @> %s::jsonb
+        """, (min_minutes, max_minutes, f'["{label}"]'))
         cols = [desc[0] for desc in cur.description]
         rows = [dict(zip(cols, row)) for row in cur.fetchall()]
+        logger.info(f"Recordatorios [{label}]: {len(rows)} encontrados (ventana: {min_minutes}-{max_minutes} min)")
         cur.close()
         conn.close()
         return rows
