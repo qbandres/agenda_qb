@@ -4,6 +4,8 @@ services:
     build: .
     container_name: jarvis-bot-2026-dev
     restart: always
+    environment:
+      - TZ=America/Lima
     env_file:
       - .env
     networks:

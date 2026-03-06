@@ -5,13 +5,15 @@ from config import logger
 
 
 def get_db_connection():
-    return psycopg2.connect(
+    conn = psycopg2.connect(
         host=os.getenv('POSTGRES_HOST'),
         database=os.getenv('POSTGRES_DB'),
         user=os.getenv('POSTGRES_USER'),
         password=os.getenv('POSTGRES_PASSWORD'),
-        port=os.getenv('POSTGRES_PORT', '5432')
+        port=os.getenv('POSTGRES_PORT', '5432'),
+        options="-c timezone=America/Lima"
     )
+    return conn
 
 
 DEFAULT_CATEGORIES = {
